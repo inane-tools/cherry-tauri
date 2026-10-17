@@ -2,7 +2,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -51,6 +51,13 @@ function api(path, missing = false) {
   const text = gh(['api', path], missing);
   return text === null ? null : JSON.parse(text);
 }
+function destinationRelease(repository, tag) {
+  // GitHub's release-by-tag endpoint can hide drafts even from the workflow.
+  // The authenticated release list includes them, allowing safe retries.
+  return api(`repos/${repository}/releases/tags/${encodeURIComponent(tag)}`, true)
+    ?? api(`repos/${repository}/releases?per_page=100`).find(release => release.tag_name === tag)
+    ?? null;
+}
 async function copyRelease(source, destination, release, latestTag, compatibility) {
   const tag = release.tag_name;
   validateCopy(source, destination, tag);
@@ -66,7 +73,7 @@ async function copyRelease(source, destination, release, latestTag, compatibilit
     if (expected.some(asset => asset.name === 'latest.json')) throw Error('Source already contains a legacy manifest');
     expected.push({ name: 'latest.json', size: compatibility.length, digest: 'sha256:' + createHash('sha256').update(compatibility).digest('hex') });
   }
-  const existing = api(`repos/${destination}/releases/tags/${encodeURIComponent(tag)}`, true);
+  const existing = destinationRelease(destination, tag);
   if (existing && !existing.draft) {
     if (existing.assets.length !== expected.length || expected.some(asset => !existing.assets.some(copy => copy.name === asset.name && copy.size === asset.size && (!asset.digest || !copy.digest || asset.digest === copy.digest)))) throw Error('Published destination release differs; refusing to overwrite ' + tag);
     console.log('Already copied ' + tag); return;
@@ -95,7 +102,7 @@ async function copyRelease(source, destination, release, latestTag, compatibilit
     await writeFile(notes, (release.body || '') + `\n\nOriginally published ${release.published_at || ''}: ${release.html_url}\n`);
     if (!existing) gh(['release', 'create', tag, '--repo', destination, '--verify-tag', '--title', release.name || tag, '--notes-file', notes, '--draft', ...(release.prerelease ? ['--prerelease'] : [])]);
     if (expected.length) gh(['release', 'upload', tag, '--repo', destination, '--clobber', ...expected.map(asset => join(folder, asset.name))]);
-    const uploaded = api(`repos/${destination}/releases/tags/${encodeURIComponent(tag)}`);
+    const uploaded = destinationRelease(destination, tag);
     if (uploaded.assets.length !== expected.length || expected.some(asset => !uploaded.assets.some(copy => copy.name === asset.name && copy.size === asset.size && (!copy.digest || copy.digest === checksums.get(asset.name))))) throw Error('Uploaded assets failed verification: ' + tag);
     gh(['release', 'edit', tag, '--repo', destination, '--title', release.name || tag, '--notes-file', notes, '--draft=false', `--prerelease=${release.prerelease}`, `--latest=${tag === latestTag && !release.prerelease}`]);
     console.log(`Copied ${tag}: ${expected.length} verified assets; no build performed`);
