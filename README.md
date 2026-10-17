@@ -1,3 +1,5 @@
+> This repository preserves the Tauri implementation of Cherry. Active development is in [inane-tools/cherry](https://github.com/inane-tools/cherry), which now uses Electron. Historical Tauri source, tags and release downloads are retained here.
+
 # Cherry
 
 Cherry is a YouTube Music desktop client for **Windows and Linux**, with a custom
